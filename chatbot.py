@@ -1,64 +1,73 @@
 import streamlit as st
 import google.generativeai as genai
 
-# --- Page Config ---
+# --- Page Setup ---
 st.set_page_config(page_title="Universal AI Assistant", page_icon="🤖")
 st.title("🤖 Universal AI Assistant")
-st.caption("Powered by Google Gemini (Secure Mode)")
 
-# --- 1. API Key Setup (Automatic) ---
-# Pehle hum sidebar se mangte the, ab hum Secrets se lenge
+# --- 1. API Key Setup ---
 try:
-    # Ye line cloud se ya local secrets.toml file se key uthayegi
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
 except Exception as e:
-    # Agar key nahi mili to error dikhayega
-    st.error("⚠️ Error: API Key nahi mili! Please Streamlit Secrets check karein.")
+    st.error("⚠️ API Key Error: Please check Streamlit Secrets.")
     st.stop()
 
-# --- Sidebar (Sirf Clear Button ke liye) ---
-with st.sidebar:
-    st.header("Settings")
-    if st.button("Chat Clear Karein"):
-        st.session_state.messages = []
-        st.session_state.chat = None
-        st.rerun()
+# --- 2. Auto-Detect Model (Magic Fix) ---
+# Ye function check karega ki kaunsa model available hai
+@st.cache_resource
+def get_model():
+    try:
+        # Google se pucho ki kaunse models available hain
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                # Pehla working model milte hi return kar do
+                return m.name
+    except Exception as e:
+        return None
 
-# --- 2. Chat History Initialize ---
+# Model select karo
+model_name = get_model()
+
+if model_name:
+    # Sidebar mein dikhao ki kaunsa model connect hua
+    with st.sidebar:
+        st.success(f"Connected to: **{model_name}**")
+        if st.button("Reset Chat"):
+            st.session_state.messages = []
+            st.rerun()
+            
+    model = genai.GenerativeModel(model_name)
+else:
+    st.error("❌ Koi bhi model nahi mila. Shayad API Key galat hai ya Quota khatam ho gaya hai.")
+    st.stop()
+
+# --- 3. Chat History ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# --- 3. Model Setup (Auto-Detect Logic) ---
-if "chat" not in st.session_state or st.session_state.chat is None:
-    try:
-        # Hum direct naya model try karenge
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        st.session_state.chat = model.start_chat(history=[])
-    except Exception as e:
-        st.error(f"Model connect nahi hua: {e}")
-
 # --- 4. Chat Interface ---
-# Purane messages dikhana
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Naya input lena
-if prompt := st.chat_input("Kuch bhi poochein..."):
-    # User ka message
+if prompt := st.chat_input("Ask me anything..."):
     with st.chat_message("user"):
         st.markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # AI ka jawab
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
-        message_placeholder.markdown("Soch raha hoon...")
-        
+        message_placeholder.markdown("Thinking...")
         try:
-            response = st.session_state.chat.send_message(prompt)
+            # Chat object har baar naya banayenge taaki purane errors na aayein
+            chat = model.start_chat(history=[
+                {"role": m["role"], "parts": [m["content"]]} 
+                for m in st.session_state.messages[:-1] # Current prompt chhod kar purani history
+            ])
+            
+            response = chat.send_message(prompt)
             message_placeholder.markdown(response.text)
             st.session_state.messages.append({"role": "assistant", "content": response.text})
         except Exception as e:
-            message_placeholder.error(f"Error aaya: {e}")
+            message_placeholder.error(f"Error: {e}")
